@@ -1,42 +1,21 @@
 {
   "name": "shijimi",
   "version": "0.1.0",
-  "description": "Minimal Electron terminal emulator",
+  "description": "Minimal browser-based terminal emulator",
   "private": true,
-  "main": "src/main.js",
   "scripts": {
-    "start": "electron .",
-    "build": "electron-builder",
-    "postinstall": "electron-rebuild"
+    "start": "node bin/shijimi.js"
+  },
+  "bin": {
+    "shijimi": "bin/shijimi.js"
   },
   "dependencies": {
     "@xterm/addon-fit": "^0.11.0",
     "@xterm/addon-web-links": "^0.12.0",
     "@xterm/addon-webgl": "^0.19.0",
     "@xterm/xterm": "^6.0.0",
-    "node-pty": "^1.0.0"
-  },
-  "devDependencies": {
-    "electron": "^35.0.0",
-    "electron-builder": "^25.1.8",
-    "electron-rebuild": "^3.2.9"
-  },
-  "build": {
-    "appId": "dev.shijimi.app",
-    "productName": "shijimi",
-    "directories": {
-      "output": "dist"
-    },
-    "files": [
-      "src/**/*",
-      "package.json"
-    ],
-    "linux": {
-      "target": [
-        "dir",
-        "AppImage"
-      ],
-      "category": "Utility"
-    }
+    "node-pty": "^1.0.0",
+    "open": "^10.0.0",
+    "ws": "^8.0.0"
   }
 }

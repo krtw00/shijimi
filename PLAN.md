@@ -1,15 +1,16 @@
 # shijimi
 
-ミニマルなElectronベースターミナルエミュレータ。
+ミニマルなブラウザベースターミナルエミュレータ。
 
 ## 概要
 
-- **目的**: Wayland環境(KDE + fcitx5)でのIME不具合を回避するため、Electronのブラウザベースな入力処理を利用したターミナルを提供する
+- **目的**: Wayland環境(KDE + fcitx5)でのIME不具合を回避するため、ブラウザの入力処理を利用したターミナルを提供する
+- **方式**: ローカルHTTPサーバー + WebSocket。Electronは使わず、既存ブラウザで動作させる
 - **スコープ**: ターミナルエミュレータとしての基本機能のみ。タブ・分割・設定UI・AI機能などは含まない
 - **前提条件・制約**:
   - Arch Linux / KDE Wayland / fcitx5-hazkey 環境で動作
   - シェルは zsh をデフォルトとする
-  - hotate (既存ブラウザSSHクライアント) の xterm.js / IME処理の知見を活用
+  - ユーザーの既存ブラウザ（Firefox等）を利用
 
 ## 要件
 
@@ -17,74 +18,84 @@
 
 - ローカルシェル(zsh)をpty経由で起動し、xterm.jsで描画する
 - 日本語IME入力(fcitx5)が正しく動作する（compositionイベント経由）
-- ウィンドウリサイズ時にptyのサイズを追従させる
+- ブラウザウィンドウリサイズ時にptyのサイズを追従させる
 - xterm-256color相当のカラー・エスケープシーケンス対応
-- コピー&ペースト（Ctrl+Shift+C/V またはOS標準）
+- コピー&ペースト（ブラウザ標準のCtrl+C/V、ターミナル内はCtrl+Shift+C/V）
 - フォント・フォントサイズの設定（設定ファイルベース）
 - テーマカラーの設定（設定ファイルベース）
 
 ### 非機能要件
 
-- 起動が速い（Electronの制約内で最小限に）
-- メモリ使用量を抑える（不要な機能を載せない）
+- 起動が速い（サーバー起動 → ブラウザ開くまで1秒以内を目標）
+- メモリ使用量を最小限に（サーバー側は数MB程度）
+- セキュリティ: localhost のみバインド、外部からアクセス不可
 
 ## 設計
 
 ### アーキテクチャ
 
 ```
-┌─────────────────────────────────┐
-│         Electron Main           │
-│  ┌───────────┐  ┌────────────┐  │
-│  │  node-pty  │  │  config    │  │
-│  │  (pty管理) │  │  (設定読込) │  │
-│  └─────┬─────┘  └─────┬──────┘  │
-│        │ IPC           │ IPC     │
-├────────┼───────────────┼────────┤
-│        ▼               ▼        │
-│       Electron Renderer          │
-│  ┌───────────┐  ┌────────────┐  │
-│  │  xterm.js  │  │  IME入力   │  │
-│  │  (描画)    │  │  (composition)│
-│  └───────────┘  └────────────┘  │
-└─────────────────────────────────┘
+┌──────────────────────────────┐
+│  既存ブラウザ (Firefox等)     │
+│  ┌────────────┐              │
+│  │ xterm.js   │  WebSocket   │
+│  │ IME処理    │ ────────────┼──┐
+│  └────────────┘              │  │
+└──────────────────────────────┘  │
+                                  ▼
+            ┌──────────────────────────┐
+            │  Node.js サーバー         │
+            │  ┌──────────┐            │
+            │  │ node-pty  │            │
+            │  └──────────┘            │
+            │  HTTP (静的配信)          │
+            │  WebSocket (pty通信)      │
+            │  設定ファイル読み込み       │
+            └──────────────────────────┘
 ```
 
-- **Main process**: node-ptyでローカルシェルを起動、設定ファイル読み込み
-- **Renderer process**: xterm.jsで描画、IME入力のcompositionイベント処理
-- **IPC**: main↔renderer間でptyデータとリサイズイベントをやり取り
+- **サーバー (server.js)**: HTTP（静的ファイル配信 + 設定API）+ WebSocket（pty通信）
+- **クライアント (client.js)**: xterm.jsで描画、WebSocket経由でpty通信、IME処理はブラウザ任せ
+- **CLI (bin/shijimi.js)**: サーバー起動 → ブラウザを開く → シェル終了で自動停止
 
 ### 技術選定
 
 | 要素 | 選定 | 理由 |
 |------|------|------|
-| アプリフレームワーク | Electron | ブラウザベースIME処理でWayland IME問題を回避 |
-| ターミナル描画 | xterm.js | hotateで実績あり、デファクトスタンダード |
-| PTY | node-pty | Electron main processで直接使える |
-| ビルド | electron-builder | Linux向けパッケージング |
+| サーバー | Node.js (標準 http モジュール) | 外部依存最小、node-ptyと同一プロセスで動作 |
+| WebSocket | ws | 軽量で実績あり |
+| ターミナル描画 | xterm.js (@xterm/xterm) | デファクトスタンダード |
+| PTY | node-pty | ローカルシェル接続 |
+| ブラウザ起動 | open (npm) | クロスプラットフォームなブラウザ起動 |
 | 設定形式 | JSON | `~/.config/shijimi/config.json` |
 
 ### ファイル構成
 
 ```
 shijimi/
+├── bin/
+│   └── shijimi.js          # CLI エントリポイント (#!/usr/bin/env node)
 ├── src/
-│   ├── main.js           # Electron main process, node-pty起動, IPC
-│   ├── preload.js         # contextBridge でIPC公開
-│   ├── renderer.js        # xterm.js初期化, IME処理, IPC経由でpty通信
-│   └── index.html         # 最小限のHTML（ターミナルコンテナのみ）
+│   ├── server.js           # HTTPサーバー + WebSocket + node-pty管理
+│   ├── config.js            # 設定ファイル読み込み・マージ
+│   └── public/
+│       ├── index.html       # ミニマルHTML
+│       └── client.js        # xterm.js初期化, WebSocket接続, リサイズ処理
 ├── package.json
 ├── PLAN.md
+├── README.md
 └── .gitignore
 ```
 
 ### データフロー
 
-1. **起動**: main.js → node-ptyでzsh起動 → BrowserWindow作成
-2. **入力**: renderer(xterm.js onData) → IPC → main(pty.write)
-3. **出力**: main(pty onData) → IPC → renderer(term.write)
-4. **リサイズ**: renderer(ResizeObserver/fitAddon) → IPC → main(pty.resize)
-5. **IME**: renderer側でcomposition eventsを追跡、確定後にonData経由で送信（xterm.jsが内部処理）
+1. **起動**: `shijimi` コマンド → server.js起動 → 空きポートでlisten → ブラウザで `localhost:PORT` を開く
+2. **WebSocket接続**: クライアント接続 → サーバーがnode-ptyでzsh起動
+3. **入力**: client(xterm.js onData) → WebSocket → server(pty.write)
+4. **出力**: server(pty onData) → WebSocket → client(term.write)
+5. **リサイズ**: client(ResizeObserver/fitAddon) → WebSocket(JSON) → server(pty.resize)
+6. **IME**: ブラウザ標準のcomposition処理。xterm.jsが内部でハンドル
+7. **終了**: シェル終了 → WebSocket close → サーバー自動停止。またはブラウザタブ閉じ → WebSocket close → サーバー停止
 
 ### 設定ファイル
 
@@ -94,7 +105,7 @@ shijimi/
 {
   "shell": "/bin/zsh",
   "font": {
-    "family": "JetBrains Mono",
+    "family": "Hack Nerd Font Mono, Noto Sans Mono CJK JP, monospace",
     "size": 14
   },
   "theme": {
@@ -106,36 +117,33 @@ shijimi/
 }
 ```
 
-### IPC チャンネル設計
+### WebSocket メッセージ設計
 
-| チャンネル | 方向 | データ |
-|-----------|------|--------|
-| `pty:data` | main → renderer | string (pty出力) |
-| `pty:write` | renderer → main | string (キー入力) |
-| `pty:resize` | renderer → main | { cols, rows } |
-| `pty:exit` | main → renderer | { code } |
-| `config:get` | renderer → main (invoke) | → config object |
+すべてJSON形式。
 
-## タスク分解
+| type | 方向 | payload |
+|------|------|---------|
+| `data` | server → client | `{ type: "data", data: string }` |
+| `input` | client → server | `{ type: "input", data: string }` |
+| `resize` | client → server | `{ type: "resize", cols: number, rows: number }` |
+| `exit` | server → client | `{ type: "exit", code: number }` |
+| `config` | server → client (初回接続時) | `{ type: "config", config: object }` |
 
-- [ ] package.json作成（Electron, xterm.js, node-pty, electron-builder）
-- [ ] .gitignore作成
-- [ ] src/main.js — Electron起動、node-pty起動、IPC登録
-- [ ] src/preload.js — contextBridge設定
-- [ ] src/renderer.js — xterm.js初期化、IPC接続、リサイズ処理
-- [ ] src/index.html — ミニマルHTML
-- [ ] 設定ファイル読み込み機能（~/.config/shijimi/config.json）
-- [ ] electron-builderでパッケージング設定
-- [ ] 動作テスト（IME入力、リサイズ、コピペ）
+### セキュリティ
 
-## リスク・懸念事項
+- `127.0.0.1` のみにバインド（外部ネットワークからアクセス不可）
+- ポートは動的に空きポートを使用（`0` で listen → 割り当て済みポートを取得）
+- 単一クライアント接続のみ許可（2つ目の接続は拒否）
 
-- **node-ptyのビルド**: ネイティブモジュールなのでelectron-rebuildが必要。Arch Linuxでは問題ないはず
-- **Electron起動速度**: footより遅い。許容範囲かは実際に使って判断
-- **Electronのメモリ**: 最小でも100MB程度は使う。用途特化なので許容
+### CLI の挙動
 
-## 未決事項
+```bash
+# 起動
+$ shijimi
+# → サーバー起動、ブラウザが開く
 
-- Ctrl+Shift+C/Vとシェルのキーバインドの競合をどう扱うか
-- ウィンドウ位置・サイズの永続化は必要か
-- 将来的にタブ対応を入れる可能性はあるか
+# 終了条件（いずれか）
+# 1. シェル(zsh)が終了 (exit, Ctrl+D)
+# 2. ブラウザタブを閉じる (WebSocket切断)
+# 3. Ctrl+C でshijimiプロセスを停止
+```
