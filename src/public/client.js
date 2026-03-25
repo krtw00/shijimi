@@ -4,6 +4,12 @@ window.addEventListener('DOMContentLoaded', () => {
   const FitAddonCtor = window.FitAddon && (window.FitAddon.FitAddon || window.FitAddon);
   const WebLinksAddonCtor = window.WebLinksAddon && (window.WebLinksAddon.WebLinksAddon || window.WebLinksAddon);
   const WebglAddonCtor = window.WebglAddon && (window.WebglAddon.WebglAddon || window.WebglAddon);
+  const isNativeWebview = Boolean(
+    window.webkit &&
+    window.webkit.messageHandlers &&
+    window.webkit.messageHandlers.external
+  );
+  const canUseResizeObserver = typeof ResizeObserver === 'function';
 
   if (!container || !TerminalCtor || !FitAddonCtor || !WebLinksAddonCtor) {
     throw new Error('xterm.js assets failed to load');
@@ -14,6 +20,7 @@ window.addEventListener('DOMContentLoaded', () => {
   let terminal = null;
   let fitAddon = null;
   let resizeObserver = null;
+  let handleWindowResize = null;
   let resizeFrame = null;
   let hasExited = false;
 
@@ -97,9 +104,16 @@ window.addEventListener('DOMContentLoaded', () => {
     terminal.loadAddon(webLinksAddon);
     terminal.open(container);
 
-    if (WebglAddonCtor) {
+    if (WebglAddonCtor && !isNativeWebview) {
       try {
-        terminal.loadAddon(new WebglAddonCtor());
+        const webglAddon = new WebglAddonCtor();
+        if (typeof webglAddon.onContextLoss === 'function') {
+          webglAddon.onContextLoss(() => {
+            webglAddon.dispose();
+            fitAndResize();
+          });
+        }
+        terminal.loadAddon(webglAddon);
       } catch {}
     }
 
@@ -164,11 +178,19 @@ window.addEventListener('DOMContentLoaded', () => {
       event.preventDefault();
     });
 
-    resizeObserver = new ResizeObserver(() => {
-      fitAndResize();
-    });
+    if (canUseResizeObserver) {
+      resizeObserver = new ResizeObserver(() => {
+        fitAndResize();
+      });
 
-    resizeObserver.observe(container);
+      resizeObserver.observe(container);
+    } else {
+      handleWindowResize = () => {
+        fitAndResize();
+      };
+      window.addEventListener('resize', handleWindowResize);
+    }
+
     fitAndResize();
     terminal.focus();
 
@@ -224,6 +246,10 @@ window.addEventListener('DOMContentLoaded', () => {
 
     if (resizeObserver) {
       resizeObserver.disconnect();
+    }
+
+    if (handleWindowResize) {
+      window.removeEventListener('resize', handleWindowResize);
     }
 
     socket.close();

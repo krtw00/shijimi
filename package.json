@@ -15,7 +15,7 @@
     "@xterm/addon-webgl": "^0.19.0",
     "@xterm/xterm": "^6.0.0",
     "node-pty": "^1.0.0",
-    "open": "^10.0.0",
+    "webview-nodejs": "^0.4.3",
     "ws": "^8.0.0"
   }
 }

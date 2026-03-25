@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Shijimi
+Comment=Minimal browser-based terminal emulator
+Exec=node /home/iguchi/dev/shijimi/bin/shijimi.js
+Icon=/home/iguchi/dev/shijimi/src/icon.svg
+Terminal=false
+Categories=System;TerminalEmulator;
+StartupWMClass=shijimi

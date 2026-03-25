@@ -1,43 +1,26 @@
 #!/usr/bin/env node
 
+const { spawn } = require('child_process');
+const path = require('path');
 const { createServer } = require('../src/server');
-
-function openBrowser(url) {
-  return import('open').then(({ default: open }) => open(url));
-}
 
 async function main() {
   const { port, close } = await createServer();
-  let shuttingDown = false;
 
-  const shutdown = async () => {
-    if (shuttingDown) {
-      return;
-    }
-
-    shuttingDown = true;
-    await close();
-  };
-
-  process.once('SIGINT', () => {
-    shutdown().finally(() => process.exit(0));
+  const child = spawn(process.execPath, [path.join(__dirname, 'webview.js'), String(port)], {
+    stdio: 'inherit',
+    env: { ...process.env, GDK_BACKEND: process.env.GDK_BACKEND || 'x11' },
   });
 
-  process.once('SIGTERM', () => {
-    shutdown().finally(() => process.exit(0));
+  child.on('exit', () => {
+    close().then(() => process.exit(0));
   });
 
-  const url = `http://127.0.0.1:${port}`;
-
-  try {
-    await openBrowser(url);
-  } catch (error) {
-    await shutdown();
-    throw error;
-  }
+  process.once('SIGINT', () => child.kill('SIGTERM'));
+  process.once('SIGTERM', () => child.kill('SIGTERM'));
 }
 
-main().catch((error) => {
-  console.error(error);
+main().catch((err) => {
+  console.error(err);
   process.exit(1);
 });
