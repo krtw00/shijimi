@@ -4,7 +4,9 @@
   "description": "Minimal browser-based terminal emulator",
   "private": true,
   "scripts": {
-    "start": "node bin/shijimi.js"
+    "start": "node bin/shijimi.js",
+    "postinstall": "node scripts/patch-webview-nodejs.js",
+    "rebuild:webview": "node scripts/patch-webview-nodejs.js"
   },
   "bin": {
     "shijimi": "bin/shijimi.js"

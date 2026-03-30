@@ -32,6 +32,113 @@ window.addEventListener('DOMContentLoaded', () => {
     socket.send(JSON.stringify(payload));
   };
 
+  // --- Clipboard helpers (navigator.clipboard fallback to server-side) ---
+
+  const copyToClipboard = (text) => {
+    if (!text) return Promise.resolve();
+    if (navigator.clipboard) {
+      return navigator.clipboard.writeText(text).catch(() => {
+        sendMessage({ type: 'clipboard-write', data: text });
+      });
+    }
+    sendMessage({ type: 'clipboard-write', data: text });
+    return Promise.resolve();
+  };
+
+  let pendingPasteResolve = null;
+
+  const readClipboard = () => {
+    if (navigator.clipboard) {
+      return navigator.clipboard.readText().catch(() => readClipboardViaServer());
+    }
+    return readClipboardViaServer();
+  };
+
+  const readClipboardViaServer = () =>
+    new Promise((resolve) => {
+      pendingPasteResolve = resolve;
+      sendMessage({ type: 'clipboard-read' });
+      setTimeout(() => {
+        if (pendingPasteResolve === resolve) {
+          pendingPasteResolve = null;
+          resolve('');
+        }
+      }, 2000);
+    });
+
+  // --- Context menu ---
+
+  const menu = document.createElement('div');
+  menu.id = 'shijimi-ctx-menu';
+  menu.style.cssText = 'display:none;position:fixed;z-index:9999;background:#1e1e2e;border:1px solid #45475a;border-radius:6px;padding:4px 0;min-width:160px;box-shadow:0 4px 12px rgba(0,0,0,.5);font-family:system-ui,sans-serif;font-size:13px;color:#cdd6f4;';
+  document.body.appendChild(menu);
+
+  const addMenuItem = (label, shortcut, action) => {
+    const item = document.createElement('div');
+    item.style.cssText = 'padding:6px 12px;cursor:default;display:flex;justify-content:space-between;gap:24px;';
+    item.innerHTML = `<span>${label}</span><span style="color:#6c7086">${shortcut}</span>`;
+    item.addEventListener('mouseenter', () => { item.style.background = '#313244'; });
+    item.addEventListener('mouseleave', () => { item.style.background = 'none'; });
+    item.addEventListener('mousedown', (e) => {
+      e.preventDefault();
+      hideMenu();
+      action();
+    });
+    menu.appendChild(item);
+    return item;
+  };
+
+  let menuCopyItem = null;
+
+  const buildMenu = () => {
+    menu.innerHTML = '';
+    menuCopyItem = addMenuItem('コピー', 'Ctrl+Shift+C', () => {
+      if (terminal) copyToClipboard(terminal.getSelection());
+    });
+    addMenuItem('ペースト', 'Ctrl+Shift+V', doPaste);
+    addMenuItem('すべて選択', 'Ctrl+Shift+A', () => {
+      if (terminal) terminal.selectAll();
+    });
+  };
+
+  const showMenu = (x, y) => {
+    buildMenu();
+    const hasSelection = terminal && terminal.getSelection();
+    menuCopyItem.style.opacity = hasSelection ? '1' : '.4';
+    menuCopyItem.style.pointerEvents = hasSelection ? 'auto' : 'none';
+    menu.style.display = 'block';
+    const rect = menu.getBoundingClientRect();
+    menu.style.left = Math.min(x, window.innerWidth - rect.width - 4) + 'px';
+    menu.style.top = Math.min(y, window.innerHeight - rect.height - 4) + 'px';
+  };
+
+  const hideMenu = () => { menu.style.display = 'none'; };
+
+  document.addEventListener('contextmenu', (e) => {
+    e.preventDefault();
+    showMenu(e.clientX, e.clientY);
+  });
+
+  document.addEventListener('mousedown', (e) => {
+    if (!menu.contains(e.target)) hideMenu();
+  });
+
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') hideMenu();
+  });
+
+  // --- Paste helper (bracket paste mode) ---
+
+  const doPaste = () => {
+    readClipboard().then((text) => {
+      if (!text || !terminal) return;
+      const wrapped = text.includes('\n')
+        ? `\x1b[200~${text}\x1b[201~`
+        : text;
+      sendMessage({ type: 'input', data: wrapped });
+    });
+  };
+
   const resolveConfig = (source) => ({
     font: {
       family: source.font && source.font.family ? source.font.family : 'Hack Nerd Font Mono, Noto Sans Mono CJK JP, monospace',
@@ -97,7 +204,7 @@ window.addEventListener('DOMContentLoaded', () => {
 
     fitAddon = new FitAddonCtor();
     const webLinksAddon = new WebLinksAddonCtor((_event, uri) => {
-      window.open(uri, '_blank', 'noopener,noreferrer');
+      sendMessage({ type: 'open-url', url: uri });
     });
 
     terminal.loadAddon(fitAddon);
@@ -131,51 +238,27 @@ window.addEventListener('DOMContentLoaded', () => {
       const key = event.key.toLowerCase();
 
       if (event.ctrlKey && event.shiftKey && key === 'c') {
-        const selection = terminal.getSelection();
-
-        if (selection && navigator.clipboard) {
-          navigator.clipboard.writeText(selection).catch(() => {});
-        }
-
+        copyToClipboard(terminal.getSelection());
         return false;
       }
 
       if (event.ctrlKey && event.shiftKey && key === 'v') {
-        if (!navigator.clipboard) {
-          return false;
-        }
+        doPaste();
+        return false;
+      }
 
-        navigator.clipboard.readText().then((text) => {
-          if (text) {
-            sendMessage({ type: 'input', data: text });
-          }
-        }).catch(() => {});
+      if (event.ctrlKey && event.shiftKey && key === 'a') {
+        terminal.selectAll();
         return false;
       }
 
       return true;
     });
 
-    window.addEventListener('copy', (event) => {
+    // Auto-copy on selection
+    terminal.onSelectionChange(() => {
       const selection = terminal.getSelection();
-
-      if (!selection || !event.clipboardData) {
-        return;
-      }
-
-      event.clipboardData.setData('text/plain', selection);
-      event.preventDefault();
-    });
-
-    window.addEventListener('paste', (event) => {
-      const text = event.clipboardData ? event.clipboardData.getData('text') : '';
-
-      if (!text) {
-        return;
-      }
-
-      sendMessage({ type: 'input', data: text });
-      event.preventDefault();
+      if (selection) copyToClipboard(selection);
     });
 
     if (canUseResizeObserver) {
@@ -214,6 +297,14 @@ window.addEventListener('DOMContentLoaded', () => {
 
     if (message.type === 'config') {
       initializeTerminal(message.config || {});
+      return;
+    }
+
+    if (message.type === 'clipboard-content' && typeof message.data === 'string') {
+      if (pendingPasteResolve) {
+        pendingPasteResolve(message.data);
+        pendingPasteResolve = null;
+      }
       return;
     }
 

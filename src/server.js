@@ -1,3 +1,4 @@
+const { execFile, execFileSync } = require('child_process');
 const fs = require('fs');
 const http = require('http');
 const os = require('os');
@@ -6,8 +7,63 @@ const pty = require('node-pty');
 const { WebSocket, WebSocketServer } = require('ws');
 const { DEFAULT_CONFIG, loadConfig } = require('./config');
 
+function whichSync(cmd) {
+  try {
+    return execFileSync('which', [cmd], { encoding: 'utf8' }).trim();
+  } catch {
+    return null;
+  }
+}
+
+function detectClipboard() {
+  const isWayland = process.env.XDG_SESSION_TYPE === 'wayland' || !!process.env.WAYLAND_DISPLAY;
+
+  if (isWayland && whichSync('wl-copy')) {
+    return {
+      copy: ['wl-copy'],
+      paste: ['wl-paste', '--no-newline'],
+    };
+  }
+
+  if (whichSync('xclip')) {
+    return {
+      copy: ['xclip', '-selection', 'clipboard'],
+      paste: ['xclip', '-selection', 'clipboard', '-o'],
+    };
+  }
+
+  if (whichSync('xsel')) {
+    return {
+      copy: ['xsel', '--clipboard', '--input'],
+      paste: ['xsel', '--clipboard', '--output'],
+    };
+  }
+
+  return null;
+}
+
+function clipboardWrite(clipboard, text) {
+  if (!clipboard) return;
+  const [cmd, ...args] = clipboard.copy;
+  const child = execFile(cmd, args, () => {});
+  child.stdin.write(text);
+  child.stdin.end();
+}
+
+function clipboardRead(clipboard) {
+  if (!clipboard) return Promise.resolve('');
+  const [cmd, ...args] = clipboard.paste;
+  return new Promise((resolve) => {
+    execFile(cmd, args, { encoding: 'utf8', timeout: 2000 }, (err, stdout) => {
+      resolve(err ? '' : stdout);
+    });
+  });
+}
+
 const PUBLIC_DIR = path.join(__dirname, 'public');
 const XTERM_DIR = path.join(__dirname, '..', 'node_modules', '@xterm');
+const ICON_PNG_PATH = path.join(__dirname, 'icon.png');
+const ICON_SVG_PATH = path.join(__dirname, 'icon.svg');
 
 const CONTENT_TYPES = {
   '.css': 'text/css; charset=utf-8',
@@ -39,6 +95,14 @@ function resolveAssetPath(requestUrl) {
 
   if (pathname === '/') {
     return path.join(PUBLIC_DIR, 'index.html');
+  }
+
+  if (pathname === '/favicon.ico' || pathname === '/icon.png') {
+    return ICON_PNG_PATH;
+  }
+
+  if (pathname === '/icon.svg') {
+    return ICON_SVG_PATH;
   }
 
   if (pathname.startsWith('/xterm/')) {
@@ -89,6 +153,7 @@ function sendMessage(socket, payload) {
 function createServer() {
   return new Promise((resolve, reject) => {
     const config = loadConfig();
+    const clipboard = detectClipboard();
     const server = http.createServer(serveFile);
     const wss = new WebSocketServer({ noServer: true });
     let activeSocket = null;
@@ -204,6 +269,29 @@ function createServer() {
           if (Number.isInteger(cols) && Number.isInteger(rows) && cols > 0 && rows > 0) {
             shellProcess.resize(cols, rows);
           }
+
+          return;
+        }
+
+        if (message.type === 'clipboard-write' && typeof message.data === 'string') {
+          clipboardWrite(clipboard, message.data);
+          return;
+        }
+
+        if (message.type === 'clipboard-read') {
+          clipboardRead(clipboard).then((text) => {
+            sendMessage(socket, { type: 'clipboard-content', data: text });
+          });
+          return;
+        }
+
+        if (message.type === 'open-url' && typeof message.url === 'string') {
+          try {
+            const parsed = new URL(message.url);
+            if (['http:', 'https:', 'mailto:'].includes(parsed.protocol)) {
+              execFile('xdg-open', [message.url], () => {});
+            }
+          } catch {}
         }
       });
 
