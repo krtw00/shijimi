@@ -26,5 +26,8 @@ const w = new Webview(process.env.SHIJIMI_WEBVIEW_DEBUG === '1');
 w.title('Shijimi');
 w.size(960, 640, SizeHint.None);
 w.size(320, 200, SizeHint.Min);
+w.bind('shijimiClose', () => {
+  w.destroy();
+});
 w.navigate(url);
 w.show();

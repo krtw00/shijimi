@@ -320,6 +320,9 @@ window.addEventListener('DOMContentLoaded', () => {
 
     if (message.type === 'exit') {
       writeExitMessage(message.code);
+      if (typeof window.shijimiClose === 'function') {
+        window.shijimiClose();
+      }
     }
   });
 
